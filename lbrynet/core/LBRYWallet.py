@@ -30,6 +30,22 @@ import os
 log = logging.getLogger(__name__)
 alert = logging.getLogger("lbryalert." + __name__)
 
+LBRYCRD_TYPE = "lbrycrd"
+LBRYUM_TYPE = "lbryum"
+
+TXID_COLUMN = "txid"
+WALLET_TYPE_COLUMN = "wallet_type"
+AMOUNT_COLUMN = "amount"
+FEE_COLUMN = "fee"
+CATEGORY_COLUMN = "category"
+NAME_COLUMN = "name"
+DATE_COLUMN = "date"
+
+CLAIM_CATEGORY = "Claim"
+SUPPORT_CATEGORY = "Support"
+DIRECT_CATEGORY = "Direct"
+PURCHASE_CATEGORY = "Purchase"
+HOSTING_CATEGORY = "Hosting"
 
 class ReservedPoints(object):
     def __init__(self, identifier, amount):
@@ -79,6 +95,8 @@ class LBRYWallet(object):
         self._balance_refresh_time = 3
         self._batch_count = 20
         self._first_run = self._FIRST_RUN_UNKNOWN
+
+        self.wallet_type = None # Set in subclasses
 
     def start(self):
 
@@ -527,14 +545,129 @@ class LBRYWallet(object):
         self.transaction_db = adbapi.ConnectionPool('sqlite3', os.path.join(self.db_dir, "transaction.db"), check_same_thread=False)
         return self.transaction_db.runQuery("CREATE TABLE IF NOT EXISTS transactions (" +
                                             "id INTEGER PRIMARY KEY," +
-                                            "txid TEXT NOT NULL," +
-                                            "wallet_type TEXT NOT NULL," +
-                                            "amount REAL NOT NULL," +
-                                            "fee REAL NOT NULL," +
-                                            "category TEXT NOT NULL," +
-                                            "name TEXT NULL," +
-                                            "date DATETIME DEFAULT CURRENT_TIMESTAMP)")
+                                            TXID_COLUMN + " TEXT NOT NULL," +
+                                            WALLET_TYPE_COLUMN + " TEXT NOT NULL," +
+                                            AMOUNT_COLUMN + " INTEGER NOT NULL," +
+                                            FEE_COLUMN + " INTEGER NULL," +
+                                            CATEGORY_COLUMN + " TEXT NOT NULL," +
+                                            NAME_COLUMN + " TEXT NULL," +
+                                            DATE_COLUMN + " DATETIME DEFAULT CURRENT_TIMESTAMP)")
 
+    def _save_transaction(self, txid, amount, fee, category, name=None):
+        self.transaction_db.runQuery("INSERT INTO transactions VALUES (?, ?, ?, ?, ?, ?)", (txid, self.wallet_type, amount, fee, category, name))
+
+    def _get_transactions(self, page, transperpage, sortcolumn=DATE_COLUMN, sortorder="DESC", includedebits=True, includecredits=True, allowedcategories=None, txid=None, name=None, amountmin=None, amountmax=None, datemin=None, datemax=None):
+        if type(transperpage) is not int:
+            transperpage = 10
+
+        transmax = 100
+        transmin = 10
+        transperpage = transperpage if transperpage < transmax else transmax
+        transperpage = transperpage if transperpage > transmin else transmin
+
+        if type(page) is not int:
+            page = 1
+
+        page -= 1
+        pagingquery = " LIMIT " + transperpage + "OFFSET" + page*transperpage
+
+        sortcolumn = sortcolumn.lower()
+
+        sortquery = ""
+
+        if sortcolumn != DATE_COLUMN and sortcolumn != AMOUNT_COLUMN:
+            sortcolumn = DATE_COLUMN
+
+        sortorder = sortorder.upper()
+
+        if sortorder != "DESC" and sortorder != "ASC":
+            sortorder = "DESC"
+
+        sortquery = " ORDER BY " + sortcolumn + " " + sortorder
+
+        if includedebits != True and includedebits != False:
+            includedebits = True
+
+        if includecredits != True and includecredits != False:
+            includecredits = True
+
+        if includedebits == False and includecredits == False:
+            includeDebits = True
+            includecredits = True
+
+        debitcreditquery = ""
+
+        if includedebits == False:
+            debitcreditquery = AMOUNT_COLUMN + " > 0"
+        elif includecredits == False:
+            debitcreditquery = AMOUNT_COLUMN + " < 0"
+
+        categoryquery = ""
+
+        for category in allowedcategories:
+            category = category.lower()
+            orneeded = ""
+
+            if category != CLAIM_CATEGORY and category != SUPPORT_CATEGORY and category != DIRECT_CATEGORY and category != PURCHASE_CATEGORY and category != HOSTING_CATEGORY:
+                continue
+            else:
+                categoryquery += orneeded + CATEGORY_COLUMN + " = " + category
+                orneeded = "OR "
+
+        txidquery = ""
+
+        if txid != None:
+            txidquery = TXID_COLUMN + " = '%s'".format(txid)
+
+        namequery = ""
+
+        if name != None:
+            namequery = NAME_COLUMN + " = '%s'".format(name)
+
+        amountmaxquery = ""
+
+        if type(amountmax) is int:
+            amountmax = abs(amountmax) * 10^9
+            amountmaxquery = AMOUNT_COLUMN + " <= " + amountmax
+
+        amountminquery = ""
+
+        if type(amountmin) is int:
+            amountmin = abs(amountmin) * 10^9
+            amountminquery = AMOUNT_COLUMN + " <= " + amountmin
+
+        dateminquery = ""
+
+        if datemin != None: #TODO confirm validation
+            dateminquery = DATE_COLUMN + " <= '%s'".format(datemin)
+
+        datemaxquery = ""
+
+        if datemax != None:  # TODO confirm validation
+            datemaxquery = DATE_COLUMN + " <= '%s'".format(datemax)
+
+        query = "SELECT * FROM transactions WHERE " + WALLET_TYPE_COLUMN + " = " + self.wallet_type
+        andneeded = " AND "
+
+        def addWhereQuery(query, wherequery):
+            if wherequery != "":
+                query += andneeded + wherequery
+
+            return query
+
+        query = addWhereQuery(query, debitcreditquery)
+        query = addWhereQuery(query, categoryquery)
+        query = addWhereQuery(query, txidquery)
+        query = addWhereQuery(query, namequery)
+        query = addWhereQuery(query, amountmaxquery)
+        query = addWhereQuery(query, amountminquery)
+        query = addWhereQuery(query, datemaxquery)
+        query = addWhereQuery(query, dateminquery)
+
+        query += sortquery + pagingquery
+
+        d = self.transaction_db.runQuery(query)
+        return d
 
     def _save_name_metadata(self, name, sd_hash, txid):
         d = self.db.runQuery("select * from name_metadata where txid=?", (txid,))
@@ -619,6 +752,7 @@ class LBRYcrdWallet(LBRYWallet):
         self.wallet_conf = wallet_conf
         self.lbrycrdd = None
         self.lbrycrdd_path = lbrycrdd_path
+        self.wallet_type = LBRYCRD_TYPE
 
         settings = self._get_rpc_conf()
         rpc_user = settings["username"]
@@ -933,6 +1067,7 @@ class LBRYumWallet(LBRYWallet):
         self.blocks_behind_alert = 0
         self.catchup_progress = 0
         self.max_behind = 0
+        self.wallet_type = LBRYUM_TYPE
 
     def _start(self):
 
