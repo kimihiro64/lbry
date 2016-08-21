@@ -59,6 +59,7 @@ class LBRYWallet(object):
 
         self.db_dir = db_dir
         self.db = None
+        self.transaction_db = None
         self.next_manage_call = None
         self.wallet_balance = Decimal(0.0)
         self.total_reserved_points = Decimal(0.0)
@@ -87,6 +88,7 @@ class LBRYWallet(object):
             return True
 
         d = self._open_db()
+        d.addCallback(lambda _: self._open_transaction_db())
         d.addCallback(lambda _: self._start())
         d.addCallback(lambda _: start_manage())
         return d
@@ -520,6 +522,19 @@ class LBRYWallet(object):
                                 "    name text, " +
                                 "    txid text, " +
                                 "    sd_hash text)")
+
+    def _open_transaction_db(self):
+        self.transaction_db = adbapi.ConnectionPool('sqlite3', os.path.join(self.db_dir, "transaction.db"), check_same_thread=False)
+        return self.transaction_db.runQuery("CREATE TABLE IF NOT EXISTS transactions (" +
+                                            "id INTEGER PRIMARY KEY," +
+                                            "txid TEXT NOT NULL," +
+                                            "wallet_type TEXT NOT NULL," +
+                                            "amount REAL NOT NULL," +
+                                            "fee REAL NOT NULL," +
+                                            "category TEXT NOT NULL," +
+                                            "name TEXT NULL," +
+                                            "date DATETIME DEFAULT CURRENT_TIMESTAMP)")
+
 
     def _save_name_metadata(self, name, sd_hash, txid):
         d = self.db.runQuery("select * from name_metadata where txid=?", (txid,))
