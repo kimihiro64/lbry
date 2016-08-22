@@ -569,7 +569,7 @@ class LBRYWallet(object):
             page = 1
 
         page -= 1
-        pagingquery = " LIMIT " + transperpage + "OFFSET" + page*transperpage
+        pagingquery = " LIMIT " + transperpage + " OFFSET " + page*transperpage
 
         sortcolumn = sortcolumn.lower()
 
@@ -628,13 +628,13 @@ class LBRYWallet(object):
 
         if type(amountmax) is int:
             amountmax = abs(amountmax) * 10^9
-            amountmaxquery = AMOUNT_COLUMN + " <= " + amountmax
+            amountmaxquery = "ABS(AMOUNT_COLUMN)" + " <= " + amountmax
 
         amountminquery = ""
 
         if type(amountmin) is int:
             amountmin = abs(amountmin) * 10^9
-            amountminquery = AMOUNT_COLUMN + " <= " + amountmin
+            amountminquery = "ABS(AMOUNT_COLUMN)" + " >= " + amountmin
 
         dateminquery = ""
 
